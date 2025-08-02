@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual Environment
+.venv/
+
+# Coding Agent Prompt
+.crush/
+.claude/
+CRUSH.md
+GEMINI.md
+CLAUDE.md
