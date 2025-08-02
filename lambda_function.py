@@ -23,7 +23,7 @@ def validate_coordinates(lat, lon):
         return False, "緯度・経度は数値で入力してください"
 
 
-def get_hazard_from_input(input_text, datum='wgs84', hazard_types=None):
+def get_hazard_from_input(input_text, datum='wgs84', hazard_types=None, search_points=4):
     """
     住所、緯度経度のいずれかの入力からハザード情報を取得する
     
@@ -31,6 +31,7 @@ def get_hazard_from_input(input_text, datum='wgs84', hazard_types=None):
         input_text: 住所または緯度経度の文字列
         datum: 座標系 ('wgs84' または 'tokyo')。デフォルトは 'wgs84'
         hazard_types: 取得するハザード情報のリスト。Noneの場合は全て取得
+        search_points: 検索点数 (4: 高速, 8: 高精度)。デフォルトは4
     """
     input_type, value = input_parser.parse_input_type(input_text)
     lat, lon = None, None
@@ -76,7 +77,7 @@ def get_hazard_from_input(input_text, datum='wgs84', hazard_types=None):
         }
     
     # ハザード情報を取得
-    hazard_data = hazard_info.get_selective_hazard_info(lat, lon, hazard_types)
+    hazard_data = hazard_info.get_selective_hazard_info(lat, lon, hazard_types, search_points)
     
     return {
         'coordinates': {
@@ -128,6 +129,7 @@ def lambda_handler(event, context):
         input_text = None
         datum = None
         hazard_types = None
+        search_points = None
         
         if event.get('httpMethod') == 'GET':
             # GETリクエストの場合、クエリパラメータから取得
@@ -139,6 +141,7 @@ def lambda_handler(event, context):
             hazard_types_str = query_params.get('hazard_types')
             if hazard_types_str:
                 hazard_types = [h.strip() for h in hazard_types_str.split(',')]
+            search_points = int(query_params.get('search_points', 4))
         
         elif event.get('httpMethod') == 'POST':
             # POSTリクエストの場合、リクエストボディから取得
@@ -151,6 +154,7 @@ def lambda_handler(event, context):
                     input_text = body_data.get('input')  # 住所やURLを受け取る新しいパラメータ
                     datum = body_data.get('datum', 'wgs84')  # デフォルトはwgs84
                     hazard_types = body_data.get('hazard_types')
+                    search_points = int(body_data.get('search_points', 4))
                 except json.JSONDecodeError:
                     return {
                         'statusCode': 400,
@@ -188,11 +192,23 @@ def lambda_handler(event, context):
                     })
                 }
 
+        # search_pointsの検証
+        if search_points not in [4, 8]:
+            return {
+                'statusCode': 400,
+                'headers': headers,
+                'body': json.dumps({
+                    'error': 'Invalid search_points parameter',
+                    'message': 'search_points parameter must be either 4 (fast) or 8 (high accuracy)',
+                    'received': search_points
+                })
+            }
+
         # 入力方法を判定
         if input_text:
             # 住所・URL・座標文字列による入力
-            print(f"Processing input text: {input_text}, datum: {datum}, hazard_types: {hazard_types}")
-            result = get_hazard_from_input(input_text, datum, hazard_types)
+            print(f"Processing input text: {input_text}, datum: {datum}, hazard_types: {hazard_types}, search_points: {search_points}")
+            result = get_hazard_from_input(input_text, datum, hazard_types, search_points)
             
             # エラーの場合
             if 'error' in result:
@@ -228,10 +244,10 @@ def lambda_handler(event, context):
                     })
                 }
             
-            print(f"Fetching hazard info for coordinates: {lat_float}, {lon_float} (input datum: {datum}, hazard_types: {hazard_types})")
+            print(f"Fetching hazard info for coordinates: {lat_float}, {lon_float} (input datum: {datum}, hazard_types: {hazard_types}, search_points: {search_points})")
             
             # ハザード情報の取得
-            hazard_data = hazard_info.get_selective_hazard_info(lat_float, lon_float, hazard_types)
+            hazard_data = hazard_info.get_selective_hazard_info(lat_float, lon_float, hazard_types, search_points)
             
             # レスポンスの構築
             response_data = {
@@ -257,12 +273,12 @@ def lambda_handler(event, context):
                     'message': 'Either input parameter or both lat and lon parameters are required',
                     'examples': {
                         'coordinate_input': {
-                            'GET': '?lat=35.6586&lon=139.7454&datum=wgs84&hazard_types=earthquake,flood',
-                            'POST': '{"lat": 35.6586, "lon": 139.7454, "datum": "wgs84", "hazard_types": ["earthquake", "flood"]}'
+                            'GET': '?lat=35.6586&lon=139.7454&datum=wgs84&hazard_types=earthquake,flood&search_points=4',
+                            'POST': '{"lat": 35.6586, "lon": 139.7454, "datum": "wgs84", "hazard_types": ["earthquake", "flood"], "search_points": 4}'
                         },
                         'flexible_input': {
-                            'GET': '?input=東京都新宿区&datum=wgs84&hazard_types=tsunami,landslide',
-                            'POST': '{"input": "東京都新宿区", "datum": "wgs84", "hazard_types": ["tsunami", "landslide"]}'
+                            'GET': '?input=東京都新宿区&datum=wgs84&hazard_types=tsunami,landslide&search_points=8',
+                            'POST': '{"input": "東京都新宿区", "datum": "wgs84", "hazard_types": ["tsunami", "landslide"], "search_points": 8}'
                         }
                     },
                     'datum_options': {
@@ -276,6 +292,10 @@ def lambda_handler(event, context):
                         'high_tide': '高潮浸水想定',
                         'large_fill_land': '大規模盛土造成地',
                         'landslide': '土砂災害警戒区域'
+                    },
+                    'search_points_options': {
+                        '4': 'Fast mode (default) - ~7 seconds response time',
+                        '8': 'High accuracy mode - ~11-14 seconds response time'
                     }
                 })
             }

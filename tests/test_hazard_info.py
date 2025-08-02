@@ -61,7 +61,7 @@ class TestHazardInfo(unittest.TestCase):
             tile_and_pixel_for_center = (17, 1, 1, 10, 20)
             tile_and_pixel_for_edge = (17, 1, 1, 100, 100)
             
-            side_effect_list = [tile_and_pixel_for_center] + [tile_and_pixel_for_edge] * 8
+            side_effect_list = [tile_and_pixel_for_center] + [tile_and_pixel_for_edge] * 4
             side_effect_list += side_effect_list # Double it for the second loop
             
             mock_latlon_to_tile.side_effect = side_effect_list
@@ -115,7 +115,7 @@ class TestHazardInfo(unittest.TestCase):
         self.assertNotIn('tsunami_inundation', result)
         
         # J-SHIS should be called, others should not
-        mock_jshis.assert_called_once_with(35.0, 139.0)
+        mock_jshis.assert_called_once_with(35.0, 139.0, 4)
         mock_flood.assert_not_called()
         mock_tsunami.assert_not_called()
 
@@ -149,9 +149,9 @@ class TestHazardInfo(unittest.TestCase):
         self.assertNotIn('landslide_hazard', result)
         
         # Called functions should be called
-        mock_jshis.assert_called_once_with(35.0, 139.0)
-        mock_flood.assert_called_once_with(35.0, 139.0)
-        mock_tsunami.assert_called_once_with(35.0, 139.0)
+        mock_jshis.assert_called_once_with(35.0, 139.0, 4)
+        mock_flood.assert_called_once_with(35.0, 139.0, 4)
+        mock_tsunami.assert_called_once_with(35.0, 139.0, 4)
         
         # Not called functions should not be called
         mock_high_tide.assert_not_called()
@@ -165,7 +165,7 @@ class TestHazardInfo(unittest.TestCase):
         
         result = hazard_info.get_all_hazard_info(35.0, 139.0)
         
-        mock_selective.assert_called_once_with(35.0, 139.0)
+        mock_selective.assert_called_once_with(35.0, 139.0, None, 4)
         self.assertEqual(result, {"test": "data"})
 
     def test_get_selective_hazard_info_invalid_types(self):

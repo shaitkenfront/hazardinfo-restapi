@@ -169,7 +169,7 @@ class TestLambdaFunction(unittest.TestCase):
         self.assertEqual(response['statusCode'], 200)
         body = json.loads(response['body'])
         self.assertEqual(body['requested_hazard_types'], ['earthquake', 'flood'])
-        mock_hazard_info.assert_called_with(35.6586, 139.7454, ['earthquake', 'flood'])
+        mock_hazard_info.assert_called_with(35.6586, 139.7454, ['earthquake', 'flood'], 4)
 
     @patch('lambda_function.geocoding.convert_wgs84_to_tokyo_datum')
     @patch('lambda_function.hazard_info.get_selective_hazard_info')
@@ -192,7 +192,7 @@ class TestLambdaFunction(unittest.TestCase):
         self.assertEqual(response['statusCode'], 200)
         body = json.loads(response['body'])
         self.assertEqual(body['requested_hazard_types'], ['tsunami', 'landslide'])
-        mock_hazard_info.assert_called_with(35.6586, 139.7454, ['tsunami', 'landslide'])
+        mock_hazard_info.assert_called_with(35.6586, 139.7454, ['tsunami', 'landslide'], 4)
 
     def test_lambda_handler_with_invalid_hazard_types(self):
         """無効なhazard_typesパラメータのテスト"""  
@@ -224,7 +224,7 @@ class TestLambdaFunction(unittest.TestCase):
         result = get_hazard_from_input('35.6586,139.7454', 'wgs84', ['earthquake', 'tsunami'])
         
         self.assertEqual(result['status'], 'success')
-        mock_hazard_info.assert_called_with(35.6586, 139.7454, ['earthquake', 'tsunami'])
+        mock_hazard_info.assert_called_with(35.6586, 139.7454, ['earthquake', 'tsunami'], 4)
 
     def test_api_examples_include_hazard_types(self):
         """APIのサンプル例にhazard_typesパラメータが含まれていることを確認"""

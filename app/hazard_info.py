@@ -163,12 +163,12 @@ def _fetch_jshis_data(lat: float, lon: float, timeout: int = 3) -> tuple[float |
     
     return prob_50, prob_60
 
-def _get_max_info_from_tile(lat: float, lon: float, tile_url_template: str, tile_zoom: int, color_map: dict, no_risk_description: str) -> dict:
+def _get_max_info_from_tile(lat: float, lon: float, tile_url_template: str, tile_zoom: int, color_map: dict, no_risk_description: str, num_search_points: int = 4) -> dict:
     """
     指定されたタイルソースから、中心点と半径100m以内の最大値を取得する汎用関数。
     タイルをまたがる場合も考慮する。
     """
-    search_points = _get_points_in_radius(lat, lon, 100)
+    search_points = _get_points_in_radius(lat, lon, 100, num_search_points)
     
     tiles_to_fetch = {}
     for p_lat, p_lon in search_points:
@@ -226,17 +226,17 @@ def _get_max_info_from_tile(lat: float, lon: float, tile_url_template: str, tile
 
     return {"max_info": max_info["description"], "center_info": center_info["description"]}
 
-def get_tsunami_inundation_info_from_gsi_tile(lat: float, lon: float) -> dict:
+def get_tsunami_inundation_info_from_gsi_tile(lat: float, lon: float, num_search_points: int = 4) -> dict:
     """
     国土地理院の津波浸水想定タイルから、中心点と半径100m以内の最大浸水深を取得する。
     """
-    return _get_max_info_from_tile(lat, lon, TSUNAMI_TILE_URL, TSUNAMI_TILE_ZOOM, TSUNAMI_COLOR_MAP, "浸水想定なし")
+    return _get_max_info_from_tile(lat, lon, TSUNAMI_TILE_URL, TSUNAMI_TILE_ZOOM, TSUNAMI_COLOR_MAP, "浸水想定なし", num_search_points)
 
-def get_high_tide_inundation_info_from_gsi_tile(lat: float, lon: float) -> dict:
+def get_high_tide_inundation_info_from_gsi_tile(lat: float, lon: float, num_search_points: int = 4) -> dict:
     """
     国土地理院の高潮浸水想定タイルから、中心点と半径100m以内の最大浸水深を取得する。
     """
-    return _get_max_info_from_tile(lat, lon, HIGH_TIDE_TILE_URL, HIGH_TIDE_TILE_ZOOM, HIGH_TIDE_COLOR_MAP, "浸水想定なし")
+    return _get_max_info_from_tile(lat, lon, HIGH_TIDE_TILE_URL, HIGH_TIDE_TILE_ZOOM, HIGH_TIDE_COLOR_MAP, "浸水想定なし", num_search_points)
 
 def _format_jshis_probability(prob_value) -> str:
     """
@@ -287,33 +287,47 @@ def _get_and_format_hazard_info(getter_func, max_key: str, center_key: str, form
 
 
 
-def _get_points_in_radius(lat: float, lon: float, radius_m: int, num_points: int = 8) -> list[tuple[float, float]]:
+def _get_points_in_radius(lat: float, lon: float, radius_m: int, num_points: int = 4) -> list[tuple[float, float]]:
     """
     指定した中心座標から半径radius_mの円周上の点をnum_points個生成する。
+    デフォルトは4点（北東南西）でパフォーマンスと精度のバランスを最適化。
     """
     points = [(lat, lon)] # 中心点を常に含める
     R = 6378137  # 地球の半径(m)
     
-    for i in range(num_points):
-        angle = 2 * math.pi * i / num_points
-        
-        d_lat = radius_m * math.cos(angle)
-        d_lon = radius_m * math.sin(angle)
-        
-        new_lat = lat + (d_lat / R) * (180 / math.pi)
-        new_lon = lon + (d_lon / R) * (180 / math.pi) / math.cos(lat * math.pi / 180)
-        
-        points.append((new_lat, new_lon))
+    # 4点の場合は主要4方向（北東南西）に配置
+    if num_points == 4:
+        directions = [0, math.pi/2, math.pi, 3*math.pi/2]  # 北、東、南、西
+        for angle in directions:
+            d_lat = radius_m * math.cos(angle)
+            d_lon = radius_m * math.sin(angle)
+            
+            new_lat = lat + (d_lat / R) * (180 / math.pi)
+            new_lon = lon + (d_lon / R) * (180 / math.pi) / math.cos(lat * math.pi / 180)
+            
+            points.append((new_lat, new_lon))
+    else:
+        # その他の点数の場合は等間隔配置
+        for i in range(num_points):
+            angle = 2 * math.pi * i / num_points
+            
+            d_lat = radius_m * math.cos(angle)
+            d_lon = radius_m * math.sin(angle)
+            
+            new_lat = lat + (d_lat / R) * (180 / math.pi)
+            new_lon = lon + (d_lon / R) * (180 / math.pi) / math.cos(lat * math.pi / 180)
+            
+            points.append((new_lat, new_lon))
         
     return points
 
-def get_jshis_info(lat: float, lon: float) -> dict[str, str]:
+def get_jshis_info(lat: float, lon: float, num_search_points: int = 4) -> dict[str, str]:
     """
     指定された緯度経度から半径100mの範囲内で最大の地震発生確率と、中心点の確率を取得する。
     J-SHIS 地点別確率値APIを使用。
     """
     results = {}
-    search_points = _get_points_in_radius(lat, lon, 100)
+    search_points = _get_points_in_radius(lat, lon, 100, num_search_points)
     
     max_prob_50 = -1.0
     max_prob_60 = -1.0
@@ -369,12 +383,12 @@ def latlon_to_gsi_tile_pixel(lat: float, lon: float, zoom: int) -> tuple[int, in
 
     return zoom, x_tile, y_tile, px, py
 
-def get_inundation_depth_from_gsi_tile(lat: float, lon: float) -> dict:
+def get_inundation_depth_from_gsi_tile(lat: float, lon: float, num_search_points: int = 4) -> dict:
     """
     国土地理院の浸水深タイル画像から、中心点と半径100m以内の最大浸水深を取得する。
     タイルをまたがる場合も考慮する。
     """
-    search_points = _get_points_in_radius(lat, lon, 100)
+    search_points = _get_points_in_radius(lat, lon, 100, num_search_points)
     
     # 必要なタイル情報を計算し、ユニークなタイルのみを保持
     tiles_to_fetch = {}
@@ -433,29 +447,29 @@ def get_inundation_depth_from_gsi_tile(lat: float, lon: float) -> dict:
 
     return {"max_depth": max_depth_info["description"], "center_depth": center_depth_info["description"]}
 
-def get_steep_slope_info_from_gsi_tile(lat: float, lon: float) -> dict:
+def get_steep_slope_info_from_gsi_tile(lat: float, lon: float, num_search_points: int = 4) -> dict:
     """
     国土地理院の急傾斜地の崩壊警戒区域タイルから情報を取得する。
     """
-    return _get_max_info_from_tile(lat, lon, STEEP_SLOPE_TILE_URL, STEEP_SLOPE_TILE_ZOOM, STEEP_SLOPE_COLOR_MAP, "該当なし")
+    return _get_max_info_from_tile(lat, lon, STEEP_SLOPE_TILE_URL, STEEP_SLOPE_TILE_ZOOM, STEEP_SLOPE_COLOR_MAP, "該当なし", num_search_points)
 
-def get_debris_flow_info_from_gsi_tile(lat: float, lon: float) -> dict:
+def get_debris_flow_info_from_gsi_tile(lat: float, lon: float, num_search_points: int = 4) -> dict:
     """
     国土地理院の土石流警戒区域タイルから情報を取得する。
     """
-    return _get_max_info_from_tile(lat, lon, DEBRIS_FLOW_TILE_URL, DEBRIS_FLOW_TILE_ZOOM, DEBRIS_FLOW_COLOR_MAP, "該当なし")
+    return _get_max_info_from_tile(lat, lon, DEBRIS_FLOW_TILE_URL, DEBRIS_FLOW_TILE_ZOOM, DEBRIS_FLOW_COLOR_MAP, "該当なし", num_search_points)
 
-def get_landslide_info_from_gsi_tile(lat: float, lon: float) -> dict:
+def get_landslide_info_from_gsi_tile(lat: float, lon: float, num_search_points: int = 4) -> dict:
     """
     国土地理院の地すべり警戒区域タイルから情報を取得する。
     """
-    return _get_max_info_from_tile(lat, lon, LANDSLIDE_TILE_URL, LANDSLIDE_TILE_ZOOM, LANDSLIDE_COLOR_MAP, "該当なし")
+    return _get_max_info_from_tile(lat, lon, LANDSLIDE_TILE_URL, LANDSLIDE_TILE_ZOOM, LANDSLIDE_COLOR_MAP, "該当なし", num_search_points)
     
-def get_large_scale_filled_land_info_from_geojson(lat: float, lon: float) -> dict:
+def get_large_scale_filled_land_info_from_geojson(lat: float, lon: float, num_search_points: int = 4) -> dict:
     """
     国土地理院の大規模盛土造成地情報をS3から取得し、中心点と半径100m以内の最大値を取得する。
     """
-    search_points = _get_points_in_radius(lat, lon, 100)
+    search_points = _get_points_in_radius(lat, lon, 100, num_search_points)
 
     max_info = {"description": "情報なし", "weight": 0}
     center_info = {"description": "情報なし", "weight": 0}
@@ -491,7 +505,7 @@ def get_large_scale_filled_land_info_from_geojson(lat: float, lon: float) -> dic
 
     return {"max_info": max_info["description"], "center_info": center_info["description"]}
 
-def get_selective_hazard_info(lat: float, lon: float, hazard_types: list[str] = None) -> dict[str, str]:
+def get_selective_hazard_info(lat: float, lon: float, hazard_types: list[str] = None, search_points: int = 4) -> dict[str, str]:
     """
     指定されたハザード情報のみを取得する。
     
@@ -505,6 +519,7 @@ def get_selective_hazard_info(lat: float, lon: float, hazard_types: list[str] = 
                      - 'high_tide': 高潮浸水想定
                      - 'large_fill_land': 大規模盛土造成地
                      - 'landslide': 土砂災害警戒区域
+        search_points: 検索点数 (4: 高速, 8: 高精度)。デフォルトは4
     """
     # デフォルトで全ハザード情報を取得
     if hazard_types is None:
@@ -514,7 +529,7 @@ def get_selective_hazard_info(lat: float, lon: float, hazard_types: list[str] = 
 
     # 地震発生確率情報
     if 'earthquake' in hazard_types:
-        jshis_info = get_jshis_info(lat, lon)
+        jshis_info = get_jshis_info(lat, lon, search_points)
         hazard_info['jshis_prob_50'] = {
             'max_prob': jshis_info.get('max_prob_50'),
             'center_prob': jshis_info.get('center_prob_50')
@@ -526,7 +541,7 @@ def get_selective_hazard_info(lat: float, lon: float, hazard_types: list[str] = 
     
     # 想定最大浸水深
     if 'flood' in hazard_types:
-        inundation_info = get_inundation_depth_from_gsi_tile(lat, lon)
+        inundation_info = get_inundation_depth_from_gsi_tile(lat, lon, search_points)
         hazard_info['inundation_depth'] = {
             'max_info': inundation_info.get('max_depth'),
             'center_info': inundation_info.get('center_depth')
@@ -534,7 +549,7 @@ def get_selective_hazard_info(lat: float, lon: float, hazard_types: list[str] = 
 
     # 津波浸水想定
     if 'tsunami' in hazard_types:
-        tsunami_info = get_tsunami_inundation_info_from_gsi_tile(lat, lon)
+        tsunami_info = get_tsunami_inundation_info_from_gsi_tile(lat, lon, search_points)
         hazard_info['tsunami_inundation'] = {
             'max_info': tsunami_info.get('max_info'),
             'center_info': tsunami_info.get('center_info')
@@ -542,7 +557,7 @@ def get_selective_hazard_info(lat: float, lon: float, hazard_types: list[str] = 
 
     # 高潮浸水想定
     if 'high_tide' in hazard_types:
-        hightide_info = get_high_tide_inundation_info_from_gsi_tile(lat, lon)
+        hightide_info = get_high_tide_inundation_info_from_gsi_tile(lat, lon, search_points)
         hazard_info['hightide_inundation'] = {
             'max_info': hightide_info.get('max_info'),
             'center_info': hightide_info.get('center_info')
@@ -550,7 +565,7 @@ def get_selective_hazard_info(lat: float, lon: float, hazard_types: list[str] = 
 
     # 大規模盛土造成地
     if 'large_fill_land' in hazard_types:
-        large_fill_land_info = get_large_scale_filled_land_info_from_geojson(lat, lon)
+        large_fill_land_info = get_large_scale_filled_land_info_from_geojson(lat, lon, search_points)
         hazard_info['large_fill_land'] = {
             'max_info': large_fill_land_info.get('max_info'),
             'center_info': large_fill_land_info.get('center_info')
@@ -558,9 +573,9 @@ def get_selective_hazard_info(lat: float, lon: float, hazard_types: list[str] = 
     
     # 土砂災害警戒区域
     if 'landslide' in hazard_types:
-        debris_flow_info = get_debris_flow_info_from_gsi_tile(lat, lon)
-        steep_slope_info = get_steep_slope_info_from_gsi_tile(lat, lon)
-        landslide_info = get_landslide_info_from_gsi_tile(lat, lon)
+        debris_flow_info = get_debris_flow_info_from_gsi_tile(lat, lon, search_points)
+        steep_slope_info = get_steep_slope_info_from_gsi_tile(lat, lon, search_points)
+        landslide_info = get_landslide_info_from_gsi_tile(lat, lon, search_points)
 
         hazard_info['landslide_hazard'] = {
             'debris_flow': {'max_info': debris_flow_info.get('max_info'), 'center_info': debris_flow_info.get('center_info')},
@@ -570,11 +585,11 @@ def get_selective_hazard_info(lat: float, lon: float, hazard_types: list[str] = 
 
     return hazard_info
 
-def get_all_hazard_info(lat: float, lon: float) -> dict[str, str]:
+def get_all_hazard_info(lat: float, lon: float, search_points: int = 4) -> dict[str, str]:
     """
     すべてのハザード情報をまとめて取得する（後方互換性のため）。
     """
-    return get_selective_hazard_info(lat, lon)
+    return get_selective_hazard_info(lat, lon, None, search_points)
 
 def format_all_hazard_info_for_display(hazards: dict) -> dict:
     """
