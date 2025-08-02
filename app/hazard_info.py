@@ -4,6 +4,7 @@ import math
 from PIL import Image
 from io import BytesIO
 from shapely.geometry import shape, Point
+from concurrent.futures import ThreadPoolExecutor
 from app import geocoding, geojsonhelper
 
 # J-SHIS API 地点別確率値APIのベースURL (2020年版、平均、全期間)
@@ -108,6 +109,60 @@ FLOOD_INUNDATION_COLOR_MAP = {
     (255, 255, 179): {"description": "0.3m未満", "weight": 0.2}
 }
 
+def _fetch_single_tile(tile_url: str, timeout: int = 3) -> Image.Image | None:
+    """
+    単一のタイル画像を取得するヘルパー関数
+    """
+    try:
+        response = requests.get(tile_url, timeout=timeout)
+        response.raise_for_status()
+        return Image.open(BytesIO(response.content)).convert('RGBA')
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching tile {tile_url}: {e}")
+        return None
+
+def _fetch_jshis_data(lat: float, lon: float, timeout: int = 3) -> tuple[float | None, float | None]:
+    """
+    単一の地点のJ-SHISデータを取得するヘルパー関数
+    """
+    params_50 = {
+        'position': f'{lon},{lat}',
+        'epsg': 4326,
+    }
+    params_60 = {
+        'position': f'{lon},{lat}',
+        'epsg': 4326,
+    }
+    
+    prob_50 = None
+    prob_60 = None
+    
+    try:
+        response_50 = requests.get(JSHIS_API_URL_BASE, params=params_50, timeout=timeout)
+        response_50.raise_for_status()
+        geojson_50 = response_50.json()
+        
+        if geojson_50.get('features') and geojson_50['features'][0].get('properties'):
+            prob_50_val = geojson_50['features'][0]['properties'].get('T30_I50_PS')
+            if prob_50_val is not None:
+                prob_50 = float(prob_50_val)
+    except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
+        print(f"Error fetching J-SHIS 50 data for {lat},{lon}: {e}")
+
+    try:
+        response_60 = requests.get(JSHIS_API_URL_BASE, params=params_60, timeout=timeout)
+        response_60.raise_for_status()
+        geojson_60 = response_60.json()
+        
+        if geojson_60.get('features') and geojson_60['features'][0].get('properties'):
+            prob_60_val = geojson_60['features'][0]['properties'].get('T30_I60_PS')
+            if prob_60_val is not None:
+                prob_60 = float(prob_60_val)
+    except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
+        print(f"Error fetching J-SHIS 60 data for {lat},{lon}: {e}")
+    
+    return prob_50, prob_60
+
 def _get_max_info_from_tile(lat: float, lon: float, tile_url_template: str, tile_zoom: int, color_map: dict, no_risk_description: str) -> dict:
     """
     指定されたタイルソースから、中心点と半径100m以内の最大値を取得する汎用関数。
@@ -121,14 +176,21 @@ def _get_max_info_from_tile(lat: float, lon: float, tile_url_template: str, tile
         if (zoom, x_tile, y_tile) not in tiles_to_fetch:
             tiles_to_fetch[(zoom, x_tile, y_tile)] = None
 
-    for (zoom, x_tile, y_tile) in tiles_to_fetch.keys():
-        tile_url = tile_url_template.format(z=zoom, x=x_tile, y=y_tile)
-        try:
-            response = requests.get(tile_url, timeout=10)
-            response.raise_for_status()
-            tiles_to_fetch[(zoom, x_tile, y_tile)] = Image.open(BytesIO(response.content)).convert('RGBA')
-        except requests.exceptions.RequestException as e:
-            print(f"Error fetching tile {zoom}/{x_tile}/{y_tile}: {e}")
+    # タイルを並列取得
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {}
+        for (zoom, x_tile, y_tile) in tiles_to_fetch.keys():
+            tile_url = tile_url_template.format(z=zoom, x=x_tile, y=y_tile)
+            future = executor.submit(_fetch_single_tile, tile_url, 3)
+            futures[(zoom, x_tile, y_tile)] = future
+        
+        # 結果を収集
+        for (zoom, x_tile, y_tile), future in futures.items():
+            try:
+                tiles_to_fetch[(zoom, x_tile, y_tile)] = future.result(timeout=5)
+            except Exception as e:
+                print(f"Error fetching tile {zoom}/{x_tile}/{y_tile}: {e}")
+                tiles_to_fetch[(zoom, x_tile, y_tile)] = None
 
     max_info = {"description": no_risk_description, "weight": 0}
     center_info = {"description": no_risk_description, "weight": 0}
@@ -142,11 +204,7 @@ def _get_max_info_from_tile(lat: float, lon: float, tile_url_template: str, tile
             continue
 
         try:
-            # デバッグ用ログ: ピクセル取得直前の情報
-            print(f"DEBUG: Attempting to get pixel at ({px}, {py}) from tile {zoom}/{x_tile}/{y_tile}. Image mode: {img.mode}")
             r, g, b, a = img.getpixel((px, py))
-            # デバッグ用ログ: 取得したピクセル情報
-            print(f"DEBUG: Pixel at ({px}, {py}) is RGB: ({r}, {g}, {b}), Alpha: {a}")
             pixel_rgb = (r, g, b)
             current_info = {"description": "情報なし", "weight": -1}
 
@@ -262,50 +320,30 @@ def get_jshis_info(lat: float, lon: float) -> dict[str, str]:
     center_prob_50 = None
     center_prob_60 = None
 
-    for i, (p_lat, p_lon) in enumerate(search_points):
-        is_center_point = (i == 0)
-
-        # 震度5強以上の確率を取得
-        params_50 = {
-            'position': f'{p_lon},{p_lat}',
-            'epsg': 4326,
-        }
-        try:
-            response_50 = requests.get(JSHIS_API_URL_BASE, params=params_50, timeout=10)
-            response_50.raise_for_status()
-            geojson_50 = response_50.json()
-            
-            if geojson_50.get('features') and geojson_50['features'][0].get('properties'):
-                prob_50_val = geojson_50['features'][0]['properties'].get('T30_I50_PS')
+    # J-SHISデータを並列取得
+    with ThreadPoolExecutor(max_workers=len(search_points)) as executor:
+        futures = {}
+        for i, (p_lat, p_lon) in enumerate(search_points):
+            future = executor.submit(_fetch_jshis_data, p_lat, p_lon, 3)
+            futures[i] = (future, i == 0)  # (future, is_center_point)
+        
+        # 結果を収集
+        for i, (future, is_center_point) in futures.items():
+            try:
+                prob_50_val, prob_60_val = future.result(timeout=5)
+                
                 if prob_50_val is not None:
-                    prob_50_float = float(prob_50_val)
-                    max_prob_50 = max(max_prob_50, prob_50_float)
+                    max_prob_50 = max(max_prob_50, prob_50_val)
                     if is_center_point:
-                        center_prob_50 = prob_50_float
-
-        except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
-            print(f"Error fetching or decoding J-SHIS 50 data: {e}")
-
-        # 震度6強以上の確率を取得
-        params_60 = {
-            'position': f'{p_lon},{p_lat}',
-            'epsg': 4326,
-        }
-        try:
-            response_60 = requests.get(JSHIS_API_URL_BASE, params=params_60, timeout=10)
-            response_60.raise_for_status()
-            geojson_60 = response_60.json()
-
-            if geojson_60.get('features') and geojson_60['features'][0].get('properties'):
-                prob_60_val = geojson_60['features'][0]['properties'].get('T30_I60_PS')
+                        center_prob_50 = prob_50_val
+                
                 if prob_60_val is not None:
-                    prob_60_float = float(prob_60_val)
-                    max_prob_60 = max(max_prob_60, prob_60_float)
+                    max_prob_60 = max(max_prob_60, prob_60_val)
                     if is_center_point:
-                        center_prob_60 = prob_60_float
-
-        except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
-            print(f"Error fetching or decoding J-SHIS 60 data: {e}")
+                        center_prob_60 = prob_60_val
+                        
+            except Exception as e:
+                print(f"Error fetching J-SHIS data for point {i}: {e}")
 
     results['max_prob_50'] = max_prob_50 if max_prob_50 != -1.0 else None
     results['center_prob_50'] = center_prob_50
@@ -345,16 +383,21 @@ def get_inundation_depth_from_gsi_tile(lat: float, lon: float) -> dict:
         if (zoom, x_tile, y_tile) not in tiles_to_fetch:
             tiles_to_fetch[(zoom, x_tile, y_tile)] = None # 初期値はNone
 
-    # 各タイル画像を取得
-    for (zoom, x_tile, y_tile) in tiles_to_fetch.keys():
-        tile_url = FLOOD_TILE_URL.format(z=zoom, x=x_tile, y=y_tile)
-        try:
-            response = requests.get(tile_url, timeout=10)
-            response.raise_for_status()
-            tiles_to_fetch[(zoom, x_tile, y_tile)] = Image.open(BytesIO(response.content))
-        except requests.exceptions.RequestException as e:
-            print(f"Error fetching flood tile {zoom}/{x_tile}/{y_tile}: {e}")
-            # 取得失敗したタイルはNoneのまま
+    # 各タイル画像を並列取得
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {}
+        for (zoom, x_tile, y_tile) in tiles_to_fetch.keys():
+            tile_url = FLOOD_TILE_URL.format(z=zoom, x=x_tile, y=y_tile)
+            future = executor.submit(_fetch_single_tile, tile_url, 3)
+            futures[(zoom, x_tile, y_tile)] = future
+        
+        # 結果を収集
+        for (zoom, x_tile, y_tile), future in futures.items():
+            try:
+                tiles_to_fetch[(zoom, x_tile, y_tile)] = future.result(timeout=5)
+            except Exception as e:
+                print(f"Error fetching flood tile {zoom}/{x_tile}/{y_tile}: {e}")
+                tiles_to_fetch[(zoom, x_tile, y_tile)] = None
     
     max_depth_info = {"description": "浸水なし", "weight": 0}
     center_depth_info = {"description": "浸水なし", "weight": 0}
