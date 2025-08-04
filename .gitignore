@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual Environment
+.venv/
+
+# Claude Code
+CLAUDE.md
+.claude/
+
+# Gemini-CLI
+GEMINI.md
+
+# Charm Crush
+CRUSH.md
+.crush/
+.crush.json
+.crushignore
+
+# Serena
+.serena/

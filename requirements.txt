@@ -1,0 +1,6 @@
+requests
+Pillow
+boto3
+shapely
+pytest
+ruff
