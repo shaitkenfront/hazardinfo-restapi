@@ -2,5 +2,6 @@ requests
 Pillow
 boto3
 shapely
+rtree
 pytest
 ruff
