@@ -180,7 +180,7 @@ def lambda_handler(event, context):
             }
         
         # hazard_typesの検証
-        valid_hazard_types = ['earthquake', 'flood', 'tsunami', 'high_tide', 'landslide', 'large_fill_land']
+        valid_hazard_types = ['earthquake', 'flood', 'flood_keizoku', 'tsunami', 'high_tide', 'landslide', 'large_fill_land']
         if hazard_types:
             invalid_types = [ht for ht in hazard_types if ht not in valid_hazard_types]
             if invalid_types:
@@ -293,6 +293,7 @@ def lambda_handler(event, context):
                     'hazard_types_options': {
                         'earthquake': '地震発生確率',
                         'flood': '想定最大浸水深',
+                        'flood_keizoku': '浸水継続時間',
                         'tsunami': '津波浸水想定',
                         'high_tide': '高潮浸水想定',
                         'landslide': '土砂災害警戒区域'

@@ -53,6 +53,10 @@ TSUNAMI_TILE_ZOOM = 16  # ズームレベル固定
 HIGH_TIDE_TILE_URL = "https://disaportaldata.gsi.go.jp/raster/03_hightide_l2_shinsuishin_data/{z}/{x}/{y}.png"
 HIGH_TIDE_TILE_ZOOM = 16  # ズームレベル固定
 
+# 浸水継続時間タイルURL
+FLOOD_KEIZOKU_TILE_URL = "https://disaportaldata.gsi.go.jp/raster/01_flood_l2_keizoku_data/{z}/{x}/{y}.png"
+FLOOD_KEIZOKU_TILE_ZOOM = 16 # ズームレベル固定
+
 # 大規模盛土造成地
 ENABLE_LARGE_FILL_LAND = (
     os.environ.get("ENABLE_LARGE_FILL_LAND", "false").lower() == "true"
@@ -128,6 +132,16 @@ FLOOD_INUNDATION_COLOR_MAP = {
     (255, 255, 179): {"description": "0.3m未満", "weight": 0.2},
 }
 
+# 浸水継続時間タイルの色と時間の対応マップ
+FLOOD_KEIZOKU_COLOR_MAP = {
+    (96, 0, 96)    : {"description": "4週間以上～", "weight": 28},
+    (180, 0, 104)  : {"description": "2週間以上～", "weight": 21},
+    (255, 40, 0)   : {"description": "1週間～2週間未満", "weight": 14},
+    (255, 153, 0)  : {"description": "3日～1週間未満", "weight": 7},
+    (250, 245, 0)  : {"description": "1日～3日未満", "weight": 3},
+    (0, 65, 255)   : {"description": "12時間～1日未満", "weight": 1},
+    (160, 210, 255): {"description": "12時間未満", "weight": 0.5},
+}
 
 def _fetch_single_tile(tile_url: str, timeout: int = 3) -> Image.Image | None:
     """
@@ -396,6 +410,23 @@ def get_high_tide_inundation_info_from_gsi_tile(
         HIGH_TIDE_TILE_URL,
         HIGH_TIDE_TILE_ZOOM,
         HIGH_TIDE_COLOR_MAP,
+        "浸水想定なし",
+        high_precision,
+    )
+
+
+def get_flood_keizoku_info_from_gsi_tile(
+    lat: float, lon: float, high_precision: bool = False
+) -> dict:
+    """
+    国土地理院の浸水継続時間タイルから、中心点と半径100m以内の最大浸水継続時間を取得する。
+    """
+    return _get_max_info_from_tile(
+        lat,
+        lon,
+        FLOOD_KEIZOKU_TILE_URL,
+        FLOOD_KEIZOKU_TILE_ZOOM,
+        FLOOD_KEIZOKU_COLOR_MAP,
         "浸水想定なし",
         high_precision,
     )
@@ -972,6 +1003,7 @@ def get_selective_hazard_info(
         hazard_types: 取得するハザード情報のリスト。Noneの場合は全て取得
                      - 'earthquake': 地震発生確率
                      - 'flood': 想定最大浸水深
+                     - 'flood_keizoku': 浸水継続時間
                      - 'tsunami': 津波浸水想定
                      - 'high_tide': 高潮浸水想定
                      - 'large_fill_land': 大規模盛土造成地
@@ -983,6 +1015,7 @@ def get_selective_hazard_info(
         hazard_types = [
             "earthquake",
             "flood",
+            "flood_keizoku",
             "tsunami",
             "high_tide",
             "large_fill_land",
@@ -1009,6 +1042,14 @@ def get_selective_hazard_info(
         hazard_info["inundation_depth"] = {
             "max_info": inundation_info.get("max_depth"),
             "center_info": inundation_info.get("center_depth"),
+        }
+
+    # 浸水継続時間
+    if "flood_keizoku" in hazard_types:
+        flood_keizoku_info = get_flood_keizoku_info_from_gsi_tile(lat, lon, high_precision)
+        hazard_info["flood_keizoku"] = {
+            "max_info": flood_keizoku_info.get("max_info"),
+            "center_info": flood_keizoku_info.get("center_info"),
         }
 
     # 津波浸水想定
@@ -1104,6 +1145,14 @@ def format_all_hazard_info_for_display(hazards: dict) -> dict:
         inundation_data.get("max_info"),
         inundation_data.get("center_info"),
         no_data_str="浸水なし",
+    )
+
+    # 浸水継続時間
+    flood_keizoku_data = hazards.get("flood_keizoku", {})
+    display_info["浸水継続時間"] = _format_hazard_output_string(
+        flood_keizoku_data.get("max_info"),
+        flood_keizoku_data.get("center_info"),
+        no_data_str="浸水想定なし",
     )
 
     # 津波浸水想定

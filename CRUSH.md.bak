@@ -1,0 +1,65 @@
+# hazardinfo-restapi ÇÃ Crush ê›íË
+
+## Project Overview
+
+### Core Architecture
+- **Entry Point**: `lambda_function.py` - AWS Lambda handler for REST API
+- **App Module**: The `/app/` directory contains the core business logic module
+- **Dual Interface**: Supports both HTTP REST API calls and LINE Messaging API Webhook
+
+### Main Modules
+- `app/hazard_info.py` - Core hazard data acquisition from multiple government APIs (J-SHIS, Geospatial Information Authority of Japan Hazard Map)
+- `app/geocoding.py` - Address geocoding and coordinate system conversion (WGS84 ? Tokyo Geodetic System)
+- `app/input_parser.py` - Address and coordinate input validation and analysis
+- `app/geojsonhelper.py` - GeoJSON processing utility for spatial data
+
+### Data Source Integration
+- **J-SHIS API** - Earthquake Hazard Information Station: Earthquake Probability Data for Japan
+- **Geospatial Information Authority of Japan Hazard Map Tiles** - Flood Depth, Tsunami, and Landslide Data Provided by the Geospatial Information Authority of Japan
+- **Google Geocoding API** - Address to Coordinate Conversion
+
+## Build and Run
+
+### Python Environment
+- Create a Virtual Environment: `python -m venv .venv`
+- Activate (Windows): `.venv\Scripts\activate`
+- Activate (macOS/Linux): `source .venv/bin/activate`
+- Install Dependencies: `pip install -r requirements.txt`
+
+### Required Environment Variables
+- `LINE_CHANNEL_ACCESS_TOKEN` - LINE Messaging API Access Token
+- `LINE_CHANNEL_SECRET` - LINE Messaging API Channel Secret
+- `GOOGLE_API_KEY` - Google Geocoding API Key
+
+### Run the Test
+
+- `pytest` - Run all tests
+- `pytest tests/test_lambda_function.py -v` - Run a specific test file with verbose output
+- `pytest tests/test_lambda_function.py tests/test_hazard_info.py -v` - Run multiple specific test files
+- `python -m pytest --collect-only` - List all available tests without running them
+
+### Coordinate Systems
+This system supports both WGS84 (global standard) and Tokyo Geodetic System (Japan local) coordinate systems, with automatic conversion possible.
+
+### Selective Data Acquisition
+The `hazard_types` parameter allows clients to request specific types of hazard information.
+- `earthquake` - Earthquake probability data
+- `flood` - Flood inundation depth
+- `flood_keizoku` - Inundation duration
+- `tsunami` - Tsunami inundation
+- `high_tide` - Storm surge inundation
+- `large_fill_land` - Large landfill
+- `landslide` - Landslide risk area
+
+### API response structure
+All responses include coordinates, source information, input type, datum, and requested hazard type.
+
+## Development rules
+
+- **If you change the source code, you must change the automated tests, run the tests, and update the README.**
+- **Modular design**: The core application logic is isolated in the `app` directory, with separate modules for each function (e.g., `geocoding.py`, `hazard_info.py`).
+- **External data source**: The application relies on an external API to obtain hazard information. The URLs and parameters for these APIs are defined as constants in `app/hazard_info.py`.
+- **Color-Coded Hazard Map**: The application interprets hazard levels by mapping the colors of tile images to specific risk descriptions and weights. These color maps are defined as dictionaries in `app/hazard_info.py`.
+- **Testing**: This project uses `pytest` for automated testing. Tests are placed in the `tests` directory and use mocks to isolate the tested code from external dependencies.
+- **Selective Information Retrieval**: This API allows users to request specific hazard types to reduce processing time and data transfer. This is handled by the `get_selective_hazard_info` function in `app/hazard_info.py`.
+- **Accuracy Mode**: This API offers two accuracy modes (`low` and `high`) for performance tuning. The "High Accuracy" mode performs a more detailed analysis of the surrounding area.
