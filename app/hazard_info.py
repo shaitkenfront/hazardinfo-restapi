@@ -22,6 +22,9 @@ WMS_GETFEATUREINFO_BASE_URL = "https://disaportal.gsi.go.jp/maps/wms/hazardmap?"
 FLOOD_TILE_URL = "https://disaportaldata.gsi.go.jp/raster/01_flood_l2_shinsuishin_data/{z}/{x}/{y}.png"
 FLOOD_TILE_ZOOM = 16  # ズームレベル固定
 
+# 計画規模浸水深タイルURL（high_precision時の追加検索用）
+FLOOD_L1_TILE_URL = "https://disaportaldata.gsi.go.jp/raster/01_flood_l1_shinsuishin_newlegend_data/{z}/{x}/{y}.png"
+
 # 土石流警戒区域・特別警戒区域URL
 DEBRIS_FLOW_TILE_URL = (
     "https://disaportaldata.gsi.go.jp/raster/05_dosekiryukeikaikuiki/{z}/{x}/{y}.png"
@@ -646,6 +649,68 @@ def get_inundation_depth_from_gsi_tile(
             print(f"Error processing flood tile pixel: {e}")
             if is_center_point:
                 center_depth_info = {"description": "処理失敗", "weight": -1}
+
+    # high_precision=Trueかつ結果が"浸水なし"/"情報なし"/"処理失敗"の場合、計画規模タイルも検索
+    if high_precision and max_depth_info["weight"] < 1:
+        # 計画規模タイルから追加検索
+        l1_tiles_to_fetch = {}
+        for p_lat, p_lon in search_points:
+            zoom, x_tile, y_tile, _, _ = latlon_to_gsi_tile_pixel(
+                p_lat, p_lon, FLOOD_TILE_ZOOM
+            )
+            if (zoom, x_tile, y_tile) not in l1_tiles_to_fetch:
+                l1_tiles_to_fetch[(zoom, x_tile, y_tile)] = None
+
+        # 計画規模タイル画像を並列取得
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            l1_futures = {}
+            for zoom, x_tile, y_tile in l1_tiles_to_fetch.keys():
+                tile_url = FLOOD_L1_TILE_URL.format(z=zoom, x=x_tile, y=y_tile)
+                future = executor.submit(_fetch_single_tile, tile_url, 3)
+                l1_futures[(zoom, x_tile, y_tile)] = future
+
+            # 結果を収集
+            for (zoom, x_tile, y_tile), future in l1_futures.items():
+                try:
+                    l1_tiles_to_fetch[(zoom, x_tile, y_tile)] = future.result(timeout=5)
+                except Exception as e:
+                    print(f"Error fetching L1 flood tile {zoom}/{x_tile}/{y_tile}: {e}")
+                    l1_tiles_to_fetch[(zoom, x_tile, y_tile)] = None
+
+        # 計画規模タイルから浸水深を検索
+        for i, (p_lat, p_lon) in enumerate(search_points):
+            is_center_point = i == 0
+            zoom, x_tile, y_tile, px, py = latlon_to_gsi_tile_pixel(
+                p_lat, p_lon, FLOOD_TILE_ZOOM
+            )
+
+            img = l1_tiles_to_fetch.get((zoom, x_tile, y_tile))
+            if img is None:
+                continue
+
+            try:
+                r, g, b, a = img.getpixel((px, py))
+                pixel_rgb = (r, g, b)
+                current_depth_info = {
+                    "description": "情報なし",
+                    "weight": -1,
+                }
+
+                if pixel_rgb in INUNDATION_COLOR_MAP:
+                    current_depth_info = INUNDATION_COLOR_MAP[pixel_rgb]
+                elif a == 0:
+                    current_depth_info = {"description": "浸水なし", "weight": 0}
+
+                # 中心点の情報を更新（現在の値より良い場合）
+                if is_center_point and current_depth_info["weight"] > center_depth_info["weight"]:
+                    center_depth_info = current_depth_info
+
+                # 最大値を更新（現在の値より良い場合）
+                if current_depth_info["weight"] > max_depth_info["weight"]:
+                    max_depth_info = current_depth_info
+
+            except Exception as e:
+                print(f"Error processing L1 flood tile pixel: {e}")
 
     return {
         "max_depth": max_depth_info["description"],
