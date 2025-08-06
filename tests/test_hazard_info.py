@@ -103,6 +103,30 @@ class TestHazardInfo(unittest.TestCase):
             self.assertEqual(result['center_info'], "1週間～2週間未満")
             self.assertEqual(result['max_info'], "1週間～2週間未満")
 
+    @patch('app.hazard_info._fetch_single_tile')
+    @patch('app.hazard_info.build_polygon')
+    @patch('app.hazard_info.is_inside')
+    def test_get_kaokutoukai_hanran_info_from_gsi_tile(self, mock_is_inside, mock_build_polygon, mock_fetch_tile):
+        """Test fetching kaokutoukai hanran info from GSI tile."""
+        # Mocks
+        mock_fetch_tile.return_value = Image.new('RGBA', (256, 256))
+        mock_build_polygon.return_value = MagicMock()
+        mock_is_inside.return_value = True
+
+        with patch('app.hazard_info.latlon_to_gsi_tile_pixel') as mock_latlon_to_tile:
+            mock_latlon_to_tile.return_value = (16, 1, 1, 128, 128)
+
+            # Test case: Center is inside
+            result = hazard_info.get_kaokutoukai_hanran_info_from_gsi_tile(35.0, 139.0)
+            self.assertEqual(result['center_info'], "区域内")
+            self.assertEqual(result['max_info'], "区域内")
+
+            # Test case: Center is outside, but high precision finds it
+            mock_is_inside.side_effect = [False] + [True] * 16 # First call (center) is False, subsequent calls (high precision) are True
+            result = hazard_info.get_kaokutoukai_hanran_info_from_gsi_tile(35.0, 139.0, high_precision=True)
+            self.assertEqual(result['center_info'], "判定なし")
+            self.assertEqual(result['max_info'], "区域内")
+
     @patch('app.hazard_info.geojsonhelper.load_large_geojson')
     @patch('app.hazard_info.geocoding.get_pref_code', return_value='13')
     def test_get_large_scale_filled_land_info(self, mock_get_pref, mock_load_geojson):
@@ -127,7 +151,8 @@ class TestHazardInfo(unittest.TestCase):
     @patch('app.hazard_info.get_inundation_depth_from_gsi_tile')
     @patch('app.hazard_info.get_tsunami_inundation_info_from_gsi_tile')
     @patch('app.hazard_info.get_flood_keizoku_info_from_gsi_tile')
-    def test_get_selective_hazard_info_earthquake_only(self, mock_flood_keizoku, mock_tsunami, mock_flood, mock_jshis):
+    @patch('app.hazard_info.get_kaokutoukai_hanran_info_from_gsi_tile')
+    def test_get_selective_hazard_info_earthquake_only(self, mock_kaokutoukai, mock_flood_keizoku, mock_tsunami, mock_flood, mock_jshis):
         """Test selective hazard info retrieval - earthquake only."""
         mock_jshis.return_value = {
             'max_prob_50': 0.05,
@@ -144,12 +169,14 @@ class TestHazardInfo(unittest.TestCase):
         self.assertNotIn('inundation_depth', result)
         self.assertNotIn('tsunami_inundation', result)
         self.assertNotIn('flood_keizoku', result)
+        self.assertNotIn('kaokutoukai_hanran', result)
         
         # J-SHIS should be called, others should not
         mock_jshis.assert_called_once_with(35.0, 139.0, False)
         mock_flood.assert_not_called()
         mock_tsunami.assert_not_called()
         mock_flood_keizoku.assert_not_called()
+        mock_kaokutoukai.assert_not_called()
 
     @patch('app.hazard_info.get_jshis_info')
     @patch('app.hazard_info.get_inundation_depth_from_gsi_tile')

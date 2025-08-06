@@ -5,7 +5,7 @@ import os
 import time
 from PIL import Image
 from io import BytesIO
-from shapely.geometry import shape, Point
+from shapely.geometry import shape, Point, Polygon
 from concurrent.futures import ThreadPoolExecutor
 from rtree import index
 from app import geocoding, geojsonhelper
@@ -56,6 +56,10 @@ HIGH_TIDE_TILE_ZOOM = 16  # ズームレベル固定
 # 浸水継続時間タイルURL
 FLOOD_KEIZOKU_TILE_URL = "https://disaportaldata.gsi.go.jp/raster/01_flood_l2_keizoku_data/{z}/{x}/{y}.png"
 FLOOD_KEIZOKU_TILE_ZOOM = 16 # ズームレベル固定
+
+# 家屋倒壊等氾濫想定区域（氾濫流）タイルURL
+KAOKUTOUKAI_HANRAN_TILE_URL = "https://disaportaldata.gsi.go.jp/raster/01_flood_l2_kaokutoukai_hanran_data/{z}/{x}/{y}.png"
+KAOKUTOUKAI_HANRAN_TILE_ZOOM = 16 # ズームレベル固定
 
 # 大規模盛土造成地
 ENABLE_LARGE_FILL_LAND = (
@@ -142,6 +146,56 @@ FLOOD_KEIZOKU_COLOR_MAP = {
     (0, 65, 255)   : {"description": "12時間～1日未満", "weight": 1},
     (160, 210, 255): {"description": "12時間未満", "weight": 0.5},
 }
+
+
+def build_polygon(img):
+    """
+    Parameters
+    ----------
+    img : PIL.Image.Image
+        赤線が (255, 0, 0) のみで描かれた画像
+
+    Returns
+    -------
+    shapely.geometry.Polygon
+        赤線外周を多角形近似したポリゴン
+    """
+    w, h = img.size
+    pixels = list(img.getdata())
+
+    # 1) 完全赤画素を収集
+    red = set()
+    for y in range(h):
+        offset = y * w
+        for x in range(w):
+            if pixels[offset + x] == (255, 0, 0):
+                red.add((x, y))
+
+    # 2) 外周だけ抽出（4近傍に非赤があれば境界）
+    border = []
+    for x, y in red:
+        nbr = [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]
+        if any((nx, ny) not in red for nx, ny in nbr):
+            border.append((x, y))
+
+    # 3) ポリゴン化し、buffer(0) で自己交差を解消
+    return Polygon(border).buffer(0)
+
+def is_inside(x, y, poly):
+    """
+    Parameters
+    ----------
+    x, y : int
+        判定したい画像内座標
+    poly : shapely.geometry.Polygon
+        build_polygon() で得たポリゴン
+
+    Returns
+    -------
+    bool
+        True なら赤線に囲まれた内部、False なら外部
+    """
+    return poly.contains(Point(x, y))
 
 def _fetch_single_tile(tile_url: str, timeout: int = 3) -> Image.Image | None:
     """
@@ -430,6 +484,47 @@ def get_flood_keizoku_info_from_gsi_tile(
         "浸水想定なし",
         high_precision,
     )
+
+
+def get_kaokutoukai_hanran_info_from_gsi_tile(
+    lat: float, lon: float, high_precision: bool = False
+) -> dict:
+    """
+    国土地理院の家屋倒壊等氾濫想定区域（氾濫流）タイルから情報を取得する。
+    """
+    # タイル座標とピクセル座標を取得
+    zoom, x_tile, y_tile, px, py = latlon_to_gsi_tile_pixel(
+        lat, lon, KAOKUTOUKAI_HANRAN_TILE_ZOOM
+    )
+
+    # タイル画像を取得
+    tile_url = KAOKUTOUKAI_HANRAN_TILE_URL.format(z=zoom, x=x_tile, y=y_tile)
+    img = _fetch_single_tile(tile_url, 3)
+
+    if img is None:
+        return {"max_info": "判定なし", "center_info": "判定なし"}
+
+    # ポリゴンを構築
+    poly = build_polygon(img)
+
+    # 中心点がポリゴン内に含まれるか判定
+    center_info = "区域内" if is_inside(px, py, poly) else "判定なし"
+
+    # high_precisionがTrueの場合は周辺も調査
+    if high_precision:
+        search_points = _get_points_in_radius(lat, lon, 100, 16)
+        max_info = "判定なし"
+        for p_lat, p_lon in search_points:
+            _, _, _, p_px, p_py = latlon_to_gsi_tile_pixel(
+                p_lat, p_lon, KAOKUTOUKAI_HANRAN_TILE_ZOOM
+            )
+            if is_inside(p_px, p_py, poly):
+                max_info = "区域内"
+                break
+    else:
+        max_info = center_info
+
+    return {"max_info": max_info, "center_info": center_info}
 
 
 def _format_jshis_probability(prob_value) -> str:
@@ -1004,6 +1099,7 @@ def get_selective_hazard_info(
                      - 'earthquake': 地震発生確率
                      - 'flood': 想定最大浸水深
                      - 'flood_keizoku': 浸水継続時間
+                     - 'kaokutoukai_hanran': 家屋倒壊等氾濫想定区域（氾濫流）
                      - 'tsunami': 津波浸水想定
                      - 'high_tide': 高潮浸水想定
                      - 'large_fill_land': 大規模盛土造成地
@@ -1016,6 +1112,7 @@ def get_selective_hazard_info(
             "earthquake",
             "flood",
             "flood_keizoku",
+            "kaokutoukai_hanran",
             "tsunami",
             "high_tide",
             "large_fill_land",
@@ -1050,6 +1147,14 @@ def get_selective_hazard_info(
         hazard_info["flood_keizoku"] = {
             "max_info": flood_keizoku_info.get("max_info"),
             "center_info": flood_keizoku_info.get("center_info"),
+        }
+
+    # 家屋倒壊等氾濫想定区域（氾濫流）
+    if "kaokutoukai_hanran" in hazard_types:
+        kaokutoukai_hanran_info = get_kaokutoukai_hanran_info_from_gsi_tile(lat, lon, high_precision)
+        hazard_info["kaokutoukai_hanran"] = {
+            "max_info": kaokutoukai_hanran_info.get("max_info"),
+            "center_info": kaokutoukai_hanran_info.get("center_info"),
         }
 
     # 津波浸水想定
@@ -1161,6 +1266,14 @@ def format_all_hazard_info_for_display(hazards: dict) -> dict:
         tsunami_data.get("max_info"),
         tsunami_data.get("center_info"),
         no_data_str="浸水想定なし",
+    )
+
+    # 家屋倒壊等氾濫想定区域（氾濫流）
+    kaokutoukai_hanran_data = hazards.get("kaokutoukai_hanran", {})
+    display_info["家屋倒壊等氾濫想定区域（氾濫流）"] = _format_hazard_output_string(
+        kaokutoukai_hanran_data.get("max_info"),
+        kaokutoukai_hanran_data.get("center_info"),
+        no_data_str="判定なし",
     )
 
     # 高潮浸水想定
