@@ -32,5 +32,5 @@ jobs:
       - name: lambda update
         run: |
           pip3 install awscli
-          cd src && zip -r package.zip ./*
+          zip -r package.zip ./*
           aws lambda update-function-code --function-name hazard_api_function_dev --zip-file fileb://package.zip --publish
