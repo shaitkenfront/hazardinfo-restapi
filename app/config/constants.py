@@ -74,6 +74,12 @@ TILE_CONFIGS = {
         "zoom": 16,
         "color_map": None,  # 特殊処理（ポリゴン判定）
         "no_risk_description": "判定なし"
+    },
+    "kaokutoukai_kagan": {
+        "url": "https://disaportaldata.gsi.go.jp/raster/01_flood_l2_kaokutoukai_kagan_data/{z}/{x}/{y}.png",
+        "zoom": 16,
+        "color_map": "KAOKUTOUKAI_KAGAN_COLOR_MAP",
+        "no_risk_description": "該当なし"
     }
 }
 
@@ -95,3 +101,5 @@ FLOOD_KEIZOKU_TILE_URL = TILE_CONFIGS["flood_keizoku"]["url"]
 FLOOD_KEIZOKU_TILE_ZOOM = TILE_CONFIGS["flood_keizoku"]["zoom"]
 KAOKUTOUKAI_HANRAN_TILE_URL = TILE_CONFIGS["kaokutoukai_hanran"]["url"]
 KAOKUTOUKAI_HANRAN_TILE_ZOOM = TILE_CONFIGS["kaokutoukai_hanran"]["zoom"]
+KAOKUTOUKAI_KAGAN_TILE_URL = TILE_CONFIGS["kaokutoukai_kagan"]["url"]
+KAOKUTOUKAI_KAGAN_TILE_ZOOM = TILE_CONFIGS["kaokutoukai_kagan"]["zoom"]

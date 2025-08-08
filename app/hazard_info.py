@@ -41,6 +41,8 @@ from app.config.constants import (
     FLOOD_KEIZOKU_TILE_ZOOM,
     KAOKUTOUKAI_HANRAN_TILE_URL,
     KAOKUTOUKAI_HANRAN_TILE_ZOOM,
+    KAOKUTOUKAI_KAGAN_TILE_URL,
+    KAOKUTOUKAI_KAGAN_TILE_ZOOM,
 )
 from app.utils.color_mapping import (
     WATER_DEPTH_COLOR_MAP,
@@ -52,6 +54,7 @@ from app.utils.color_mapping import (
     STEEP_SLOPE_COLOR_MAP,
     LANDSLIDE_COLOR_MAP,
     FLOOD_KEIZOKU_COLOR_MAP,
+    KAOKUTOUKAI_KAGAN_COLOR_MAP,
 )
 from app.utils.tile_utils import (
     latlon_to_gsi_tile_pixel,
@@ -439,6 +442,176 @@ def get_kaokutoukai_hanran_info_from_gsi_tile(
                 break
     else:
         max_info = center_info
+
+    return {"max_info": max_info, "center_info": center_info}
+
+
+def get_kaokutoukai_kagan_info_from_gsi_tile(
+    lat: float, lon: float, high_precision: bool = False
+) -> dict:
+    """
+    国土地理院の家屋倒壊等氾濫想定区域（河岸侵食）タイルから情報を取得する。
+    色の有無で判定（色があれば「該当あり」、透明であれば「該当なし」）。
+    """
+    return _get_max_info_from_tile_color_detection(
+        lat,
+        lon,
+        KAOKUTOUKAI_KAGAN_TILE_URL,
+        KAOKUTOUKAI_KAGAN_TILE_ZOOM,
+        "該当なし",
+        high_precision,
+    )
+
+
+def _get_max_info_from_tile_color_detection(
+    lat: float,
+    lon: float,
+    tile_url_template: str,
+    tile_zoom: int,
+    no_risk_description: str,
+    high_precision: bool = False,
+) -> dict:
+    """
+    色の有無で判定するタイル専用の情報取得関数。
+    任意の不透明色があれば「該当あり」、透明であれば no_risk_description を返す。
+    """
+    if high_precision:
+        return _get_max_info_from_tile_color_detection_high_precision(
+            lat, lon, tile_url_template, tile_zoom, no_risk_description
+        )
+    else:
+        return _get_max_info_from_tile_color_detection_8_directions(
+            lat, lon, tile_url_template, tile_zoom, no_risk_description
+        )
+
+
+def _get_max_info_from_tile_color_detection_8_directions(
+    lat: float,
+    lon: float,
+    tile_url_template: str,
+    tile_zoom: int,
+    no_risk_description: str,
+) -> dict:
+    """
+    中心点とその周囲8方位のピクセルを調査する色検出版
+    """
+    # 中心点の座標を取得
+    zoom, x_tile, y_tile, center_px, center_py = latlon_to_gsi_tile_pixel(
+        lat, lon, tile_zoom
+    )
+
+    # タイルを取得
+    tile_url = tile_url_template.format(z=zoom, x=x_tile, y=y_tile)
+    img = _fetch_single_tile(tile_url, HTTP_TIMEOUT_SECONDS)
+
+    if img is None:
+        return {"max_info": no_risk_description, "center_info": no_risk_description}
+
+    max_info = no_risk_description
+    center_info = no_risk_description
+
+    # チェックするピクセル座標（中心点 + 8方位）
+    pixel_offsets = [
+        (0, 0),  # 中心点
+        (-1, -1), (0, -1), (1, -1),  # 北西、北、北東
+        (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0),  # 東、南東、南、南西、西
+    ]
+
+    for i, (dx, dy) in enumerate(pixel_offsets):
+        is_center_point = i == 0
+        px = center_px + dx
+        py = center_py + dy
+
+        # 境界チェック
+        if px < 0 or px >= TILE_SIZE or py < 0 or py >= TILE_SIZE:
+            continue
+
+        try:
+            r, g, b, a = img.getpixel((px, py))
+            
+            # 透明でない場合は「該当あり」
+            current_info = "該当あり" if a > 0 else no_risk_description
+
+            if is_center_point:
+                center_info = current_info
+
+            # 「該当あり」が見つかったら最大値を更新
+            if current_info == "該当あり":
+                max_info = "該当あり"
+
+        except Exception as e:
+            print(f"ERROR: Failed to process pixel at ({px}, {py}). Error: {e}")
+            if is_center_point:
+                center_info = no_risk_description
+
+    return {"max_info": max_info, "center_info": center_info}
+
+
+def _get_max_info_from_tile_color_detection_high_precision(
+    lat: float,
+    lon: float,
+    tile_url_template: str,
+    tile_zoom: int,
+    no_risk_description: str,
+) -> dict:
+    """
+    周辺100m範囲内の全ピクセルを密度の高いサンプリングで調査する色検出版（高精度）
+    """
+    # 半径100mの範囲内で16点のサンプリング点を生成
+    search_points = _get_points_in_radius(lat, lon, SEARCH_RADIUS_METERS, HIGH_PRECISION_SEARCH_POINTS)
+
+    tiles_to_fetch = {}
+    for p_lat, p_lon in search_points:
+        zoom, x_tile, y_tile, _, _ = latlon_to_gsi_tile_pixel(p_lat, p_lon, tile_zoom)
+        if (zoom, x_tile, y_tile) not in tiles_to_fetch:
+            tiles_to_fetch[(zoom, x_tile, y_tile)] = None
+
+    # タイルを並列取得
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS_THREAD_POOL) as executor:
+        futures = {}
+        for zoom, x_tile, y_tile in tiles_to_fetch.keys():
+            tile_url = tile_url_template.format(z=zoom, x=x_tile, y=y_tile)
+            future = executor.submit(_fetch_single_tile, tile_url, HTTP_TIMEOUT_SECONDS)
+            futures[(zoom, x_tile, y_tile)] = future
+
+        # 結果を収集
+        for (zoom, x_tile, y_tile), future in futures.items():
+            try:
+                tiles_to_fetch[(zoom, x_tile, y_tile)] = future.result(timeout=THREAD_TIMEOUT_SECONDS)
+            except Exception as e:
+                print(f"Error fetching tile {zoom}/{x_tile}/{y_tile}: {e}")
+                tiles_to_fetch[(zoom, x_tile, y_tile)] = None
+
+    max_info = no_risk_description
+    center_info = no_risk_description
+
+    for i, (p_lat, p_lon) in enumerate(search_points):
+        is_center_point = i == 0
+        zoom, x_tile, y_tile, px, py = latlon_to_gsi_tile_pixel(p_lat, p_lon, tile_zoom)
+
+        img = tiles_to_fetch.get((zoom, x_tile, y_tile))
+        if img is None:
+            continue
+
+        try:
+            r, g, b, a = img.getpixel((px, py))
+            
+            # 透明でない場合は「該当あり」
+            current_info = "該当あり" if a > 0 else no_risk_description
+
+            if is_center_point:
+                center_info = current_info
+
+            # 「該当あり」が見つかったら最大値を更新
+            if current_info == "該当あり":
+                max_info = "該当あり"
+
+        except Exception as e:
+            print(
+                f"ERROR: Failed to process pixel at ({px}, {py}) on tile {zoom}/{x_tile}/{y_tile}. Error: {e}"
+            )
+            if is_center_point:
+                center_info = no_risk_description
 
     return {"max_info": max_info, "center_info": center_info}
 
@@ -952,6 +1125,7 @@ def get_selective_hazard_info(
                      - 'flood': 想定最大浸水深
                      - 'flood_keizoku': 浸水継続時間
                      - 'kaokutoukai_hanran': 家屋倒壊等氾濫想定区域（氾濫流）
+                     - 'kaokutoukai_kagan': 家屋倒壊等氾濫想定区域（河岸侵食）
                      - 'tsunami': 津波浸水想定
                      - 'high_tide': 高潮浸水想定
                      - 'large_fill_land': 大規模盛土造成地
@@ -965,6 +1139,7 @@ def get_selective_hazard_info(
             "flood",
             "flood_keizoku",
             "kaokutoukai_hanran",
+            "kaokutoukai_kagan",
             "tsunami",
             "high_tide",
             "large_fill_land",
@@ -1007,6 +1182,14 @@ def get_selective_hazard_info(
         hazard_info["kaokutoukai_hanran"] = {
             "max_info": kaokutoukai_hanran_info.get("max_info"),
             "center_info": kaokutoukai_hanran_info.get("center_info"),
+        }
+
+    # 家屋倒壊等氾濫想定区域（河岸侵食）
+    if "kaokutoukai_kagan" in hazard_types:
+        kaokutoukai_kagan_info = get_kaokutoukai_kagan_info_from_gsi_tile(lat, lon, high_precision)
+        hazard_info["kaokutoukai_kagan"] = {
+            "max_info": kaokutoukai_kagan_info.get("max_info"),
+            "center_info": kaokutoukai_kagan_info.get("center_info"),
         }
 
     # 津波浸水想定
@@ -1126,6 +1309,14 @@ def format_all_hazard_info_for_display(hazards: dict) -> dict:
         kaokutoukai_hanran_data.get("max_info"),
         kaokutoukai_hanran_data.get("center_info"),
         no_data_str="判定なし",
+    )
+
+    # 家屋倒壊等氾濫想定区域（河岸侵食）
+    kaokutoukai_kagan_data = hazards.get("kaokutoukai_kagan", {})
+    display_info["家屋倒壊等氾濫想定区域（河岸侵食）"] = _format_hazard_output_string(
+        kaokutoukai_kagan_data.get("max_info"),
+        kaokutoukai_kagan_data.get("center_info"),
+        no_data_str="該当なし",
     )
 
     # 高潮浸水想定

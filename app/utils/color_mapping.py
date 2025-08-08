@@ -50,6 +50,10 @@ FLOOD_KEIZOKU_COLOR_MAP = {
     (160, 210, 255): {"description": "12時間未満", "weight": 0.5},
 }
 
+# 家屋倒壊等氾濫想定区域（河岸侵食）タイルの色マップ
+# このタイプは色の有無で判定（色があれば「該当あり」、透明であれば「該当なし」）
+KAOKUTOUKAI_KAGAN_COLOR_MAP = {}
+
 
 def get_color_map_by_name(name: str) -> dict:
     """
@@ -74,6 +78,7 @@ def get_color_map_by_name(name: str) -> dict:
         "STEEP_SLOPE_COLOR_MAP": STEEP_SLOPE_COLOR_MAP,
         "LANDSLIDE_COLOR_MAP": LANDSLIDE_COLOR_MAP,
         "FLOOD_KEIZOKU_COLOR_MAP": FLOOD_KEIZOKU_COLOR_MAP,
+        "KAOKUTOUKAI_KAGAN_COLOR_MAP": KAOKUTOUKAI_KAGAN_COLOR_MAP,
     }
     
     if name not in color_maps:

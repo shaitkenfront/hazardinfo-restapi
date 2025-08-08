@@ -127,6 +127,78 @@ class TestHazardInfo(unittest.TestCase):
             self.assertEqual(result['center_info'], "判定なし")
             self.assertEqual(result['max_info'], "区域内")
 
+    @patch('app.hazard_info.requests.get')
+    def test_get_kaokutoukai_kagan_info_from_gsi_tile(self, mock_get):
+        """Test fetching kaokutoukai kagan (riverbank erosion) info from GSI tile."""
+        # Create a test image with color (non-transparent) pixels
+        img = Image.new('RGBA', (256, 256), (0, 0, 0, 0))  # Transparent background
+        img.putpixel((10, 20), (255, 0, 0, 255))  # Red pixel with alpha=255 (non-transparent)
+        buffer = BytesIO()
+        img.save(buffer, 'PNG')
+        buffer.seek(0)
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.content = buffer.read()
+        mock_get.return_value = mock_response
+
+        with patch('app.hazard_info.latlon_to_gsi_tile_pixel') as mock_latlon_to_tile:
+            # Mock center point to be on the colored pixel
+            tile_and_pixel_for_center = (16, 1, 1, 10, 20)
+            tile_and_pixel_for_edge = (16, 1, 1, 100, 100)  # Edge points on transparent area
+            
+            side_effect_list = [tile_and_pixel_for_center] + [tile_and_pixel_for_edge] * 8  # 1 center + 8 directions
+            mock_latlon_to_tile.side_effect = side_effect_list
+
+            result = hazard_info.get_kaokutoukai_kagan_info_from_gsi_tile(35.0, 139.0)
+
+            self.assertEqual(result['center_info'], "該当あり")
+            self.assertEqual(result['max_info'], "該当あり")
+
+    @patch('app.hazard_info.requests.get')
+    def test_get_kaokutoukai_kagan_info_no_color(self, mock_get):
+        """Test fetching kaokutoukai kagan info with transparent (no color) tile."""
+        # Create a test image with all transparent pixels
+        img = Image.new('RGBA', (256, 256), (0, 0, 0, 0))  # All transparent
+        buffer = BytesIO()
+        img.save(buffer, 'PNG')
+        buffer.seek(0)
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.content = buffer.read()
+        mock_get.return_value = mock_response
+
+        with patch('app.hazard_info.latlon_to_gsi_tile_pixel') as mock_latlon_to_tile:
+            # Mock all points to be on transparent areas
+            tile_and_pixel = (16, 1, 1, 128, 128)
+            side_effect_list = [tile_and_pixel] * 9  # 1 center + 8 directions
+            mock_latlon_to_tile.side_effect = side_effect_list
+
+            result = hazard_info.get_kaokutoukai_kagan_info_from_gsi_tile(35.0, 139.0)
+
+            self.assertEqual(result['center_info'], "該当なし")
+            self.assertEqual(result['max_info'], "該当なし")
+
+    def test_get_max_info_from_tile_color_detection_8_directions(self):
+        """Test the color detection function for 8 directions."""
+        # Create a test image
+        img = Image.new('RGBA', (256, 256), (0, 0, 0, 0))  # Transparent background
+        img.putpixel((128, 128), (255, 0, 0, 255))  # Center pixel is colored
+        
+        with patch('app.hazard_info._fetch_single_tile') as mock_fetch_tile:
+            mock_fetch_tile.return_value = img
+            
+            with patch('app.hazard_info.latlon_to_gsi_tile_pixel') as mock_latlon_to_tile:
+                mock_latlon_to_tile.return_value = (16, 1, 1, 128, 128)
+                
+                result = hazard_info._get_max_info_from_tile_color_detection_8_directions(
+                    35.0, 139.0, "dummy_url/{z}/{x}/{y}.png", 16, "該当なし"
+                )
+                
+                self.assertEqual(result['center_info'], "該当あり")
+                self.assertEqual(result['max_info'], "該当あり")
+
     @patch('app.hazard_info.geojsonhelper.load_large_geojson')
     @patch('app.hazard_info.geocoding.get_pref_code', return_value='13')
     def test_get_large_scale_filled_land_info(self, mock_get_pref, mock_load_geojson):
@@ -152,7 +224,8 @@ class TestHazardInfo(unittest.TestCase):
     @patch('app.hazard_info.get_tsunami_inundation_info_from_gsi_tile')
     @patch('app.hazard_info.get_flood_keizoku_info_from_gsi_tile')
     @patch('app.hazard_info.get_kaokutoukai_hanran_info_from_gsi_tile')
-    def test_get_selective_hazard_info_earthquake_only(self, mock_kaokutoukai, mock_flood_keizoku, mock_tsunami, mock_flood, mock_jshis):
+    @patch('app.hazard_info.get_kaokutoukai_kagan_info_from_gsi_tile')
+    def test_get_selective_hazard_info_earthquake_only(self, mock_kaokutoukai_kagan, mock_kaokutoukai, mock_flood_keizoku, mock_tsunami, mock_flood, mock_jshis):
         """Test selective hazard info retrieval - earthquake only."""
         mock_jshis.return_value = {
             'max_prob_50': 0.05,
@@ -170,6 +243,7 @@ class TestHazardInfo(unittest.TestCase):
         self.assertNotIn('tsunami_inundation', result)
         self.assertNotIn('flood_keizoku', result)
         self.assertNotIn('kaokutoukai_hanran', result)
+        self.assertNotIn('kaokutoukai_kagan', result)
         
         # J-SHIS should be called, others should not
         mock_jshis.assert_called_once_with(35.0, 139.0, False)
@@ -177,6 +251,7 @@ class TestHazardInfo(unittest.TestCase):
         mock_tsunami.assert_not_called()
         mock_flood_keizoku.assert_not_called()
         mock_kaokutoukai.assert_not_called()
+        mock_kaokutoukai_kagan.assert_not_called()
 
     @patch('app.hazard_info.get_jshis_info')
     @patch('app.hazard_info.get_inundation_depth_from_gsi_tile')
@@ -217,6 +292,29 @@ class TestHazardInfo(unittest.TestCase):
         mock_large_fill.assert_not_called()
         mock_debris.assert_not_called()
 
+    @patch('app.hazard_info.get_kaokutoukai_kagan_info_from_gsi_tile')
+    def test_get_selective_hazard_info_kaokutoukai_kagan_only(self, mock_kaokutoukai_kagan):
+        """Test selective hazard info retrieval - kaokutoukai kagan only."""
+        mock_kaokutoukai_kagan.return_value = {
+            'max_info': '該当あり',
+            'center_info': '該当なし'
+        }
+        
+        result = hazard_info.get_selective_hazard_info(35.0, 139.0, ['kaokutoukai_kagan'])
+        
+        # Only kaokutoukai_kagan data should be present
+        self.assertIn('kaokutoukai_kagan', result)
+        self.assertNotIn('jshis_prob_50', result)
+        self.assertNotIn('inundation_depth', result)
+        self.assertNotIn('kaokutoukai_hanran', result)
+        
+        # Verify the content
+        self.assertEqual(result['kaokutoukai_kagan']['max_info'], '該当あり')
+        self.assertEqual(result['kaokutoukai_kagan']['center_info'], '該当なし')
+        
+        # kaokutoukai_kagan should be called
+        mock_kaokutoukai_kagan.assert_called_once_with(35.0, 139.0, False)
+
     @patch('app.hazard_info.get_selective_hazard_info')
     def test_get_all_hazard_info_backward_compatibility(self, mock_selective):
         """Test that get_all_hazard_info calls get_selective_hazard_info with None."""
@@ -241,6 +339,39 @@ class TestHazardInfo(unittest.TestCase):
         
         # Should return empty dict for empty list
         self.assertEqual(result, {})
+
+    def test_format_all_hazard_info_for_display_with_kaokutoukai_kagan(self):
+        """Test format_all_hazard_info_for_display includes new kaokutoukai_kagan hazard type."""
+        hazards = {
+            'jshis_prob_50': {'max_prob': 0.05, 'center_prob': 0.03},
+            'jshis_prob_60': {'max_prob': 0.02, 'center_prob': 0.01},
+            'inundation_depth': {'max_info': '浸水なし', 'center_info': '浸水なし'},
+            'flood_keizoku': {'max_info': '浸水想定なし', 'center_info': '浸水想定なし'},
+            'tsunami_inundation': {'max_info': '浸水想定なし', 'center_info': '浸水想定なし'},
+            'kaokutoukai_kagan': {'max_info': '該当あり', 'center_info': '該当なし'},
+            'kaokutoukai_hanran': {'max_info': '区域内', 'center_info': '判定なし'},
+            'hightide_inundation': {'max_info': '浸水想定なし', 'center_info': '浸水想定なし'},
+            'landslide_hazard': {
+                'debris_flow': {'max_info': '該当なし', 'center_info': '該当なし'},
+                'steep_slope': {'max_info': '該当なし', 'center_info': '該当なし'},
+                'landslide': {'max_info': '該当なし', 'center_info': '該当なし'},
+            }
+        }
+        
+        result = hazard_info.format_all_hazard_info_for_display(hazards)
+        
+        # Check that both kaokutoukai types are formatted correctly
+        self.assertIn('家屋倒壊等氾濫想定区域（河岸侵食）', result)
+        self.assertIn('家屋倒壊等氾濫想定区域（氾濫流）', result)
+        
+        # Check the content formatting
+        kagan_result = result['家屋倒壊等氾濫想定区域（河岸侵食）']
+        self.assertIn('該当あり', kagan_result)
+        self.assertIn('該当なし', kagan_result)
+        
+        hanran_result = result['家屋倒壊等氾濫想定区域（氾濫流）']
+        self.assertIn('区域内', hanran_result)
+        self.assertIn('判定なし', hanran_result)
 
 if __name__ == '__main__':
     unittest.main()
