@@ -2,6 +2,14 @@
 __pycache__/
 *.pyc
 
+# GitHub Actions
+.github/
+
+# Backup Files
+*.bak
+*.tmp
+*.swp
+
 # Virtual Environment
 .venv/
 
