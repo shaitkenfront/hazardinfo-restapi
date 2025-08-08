@@ -50,6 +50,8 @@ x-api-key: YOUR_API_KEY
 | :--- | :--- |
 | `earthquake` | 30年以内の震度5強以上および6強以上の地震発生確率 |
 | `flood` | 想定最大浸水深 |
+| `flood_keizoku` | 浸水継続時間 |
+| `kaokutoukai_hanran` | 家屋倒壊等氾濫想定区域（氾濫流） |
 | `tsunami` | 津波による想定浸水深 |
 | `high_tide` | 高潮による想定浸水深 |
 | `landslide` | 土砂災害警戒区域（土石流、急傾斜地、地すべり） |
@@ -137,7 +139,7 @@ x-api-key: YOUR_API_KEY
 {
   "error": "Invalid hazard_types parameter",
   "message": "Invalid hazard types: ['invalid_type']",
-  "valid_types": ["earthquake", "flood", "tsunami", "high_tide", "landslide", "large_fill_land"]
+  "valid_types": ["earthquake", "flood", "flood_keizoku", "kaokutoukai_hanran", "tsunami", "high_tide", "landslide", "large_fill_land"]
 }
 ```
 
